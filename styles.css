@@ -88,11 +88,12 @@ input {
 
 .layout {
   display: grid;
-  grid-template-columns: 240px 1fr 320px;
-  grid-template-rows: auto auto;
+  grid-template-columns: 1fr;
   grid-template-areas:
-    "sidebar product detail"
-    "sidebar map detail";
+    "map"
+    "sidebar"
+    "product"
+    "detail";
   gap: 16px;
   padding: 12px 24px 32px;
 }
@@ -172,7 +173,23 @@ input {
 }
 
 .map .chart {
-  height: 320px;
+  height: 75vh;
+  min-height: 520px;
+  overflow: hidden;
+}
+
+.map .chart svg {
+  display: block;
+}
+
+.country {
+  stroke: #1f1a16;
+  stroke-width: 0.6;
+  transition: stroke-width 120ms ease, stroke 120ms ease;
+}
+
+.country:hover {
+  stroke-width: 1.6;
 }
 
 .note {
@@ -216,15 +233,6 @@ input {
 }
 
 @media (max-width: 1100px) {
-  .layout {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "sidebar"
-      "product"
-      "map"
-      "detail";
-  }
-
   .split {
     grid-template-columns: 1fr;
   }

@@ -12,6 +12,9 @@ const state = {
   regionFocus: "",
 };
 
+const MAP_ZOOM = 1.4;
+const MAP_CENTER_OFFSET = [-100, 460];
+
 const MONTHS = [
   "January",
   "February",
@@ -193,6 +196,35 @@ const regionForCountry = (name) => {
 const isEurope = (name) => {
   const country = normalizeCountry(name);
   return EU_COUNTRIES.has(country) || EUROPE_EXTRA.has(country);
+};
+
+const pruneFranceOverseas = (feature) => {
+  if (normalizeCountry(feature.properties.name) !== "France") return feature;
+
+  const keepPolygon = (polygon) => {
+    const centroid = d3.geoCentroid({
+      type: "Feature",
+      properties: feature.properties,
+      geometry: { type: "Polygon", coordinates: polygon },
+    });
+    const [lon, lat] = centroid;
+    return lat > 35 && lon > -10 && lon < 30;
+  };
+
+  if (feature.geometry.type === "Polygon") {
+    return keepPolygon(feature.geometry.coordinates) ? feature : null;
+  }
+
+  if (feature.geometry.type === "MultiPolygon") {
+    const kept = feature.geometry.coordinates.filter(keepPolygon);
+    if (!kept.length) return feature;
+    return {
+      ...feature,
+      geometry: { ...feature.geometry, coordinates: kept },
+    };
+  }
+
+  return feature;
 };
 
 const productCategory = (name) => {
@@ -413,7 +445,7 @@ const drawLine = (container, series, colors) => {
     .attr("d", (d) => line(d.values));
 };
 
-const drawMap = (container, features, values) => {
+const drawMap = (container, features, values, flows, reporter) => {
   const width = container.node().clientWidth;
   const height = container.node().clientHeight;
   container.selectAll("*").remove();
@@ -421,20 +453,53 @@ const drawMap = (container, features, values) => {
   const svg = container.append("svg").attr("width", width).attr("height", height);
   const europe = { type: "FeatureCollection", features };
   const projection = d3.geoMercator().fitSize([width, height], europe);
+  projection
+    .scale(projection.scale() * MAP_ZOOM)
+    .translate([width / 2 + MAP_CENTER_OFFSET[0], height / 2 + MAP_CENTER_OFFSET[1]]);
   const path = d3.geoPath(projection);
 
   const maxValue = d3.max(Object.values(values)) || 0;
   const color = d3.scaleSequential().domain([0, maxValue || 1]).interpolator(d3.interpolateOrRd);
 
-  svg
+  const centroids = new Map(
+    features.map((feature) => {
+      const name = normalizeCountry(feature.properties.name);
+      return [name, path.centroid(feature)];
+    })
+  );
+
+  const clipId = "map-clip";
+  const arrowId = "flow-arrow";
+  const defs = svg.append("defs");
+  defs
+    .append("clipPath")
+    .attr("id", clipId)
+    .append("rect")
+    .attr("width", width)
+    .attr("height", height);
+  defs
+    .append("marker")
+    .attr("id", arrowId)
+    .attr("viewBox", "0 0 10 10")
+    .attr("refX", 9)
+    .attr("refY", 5)
+    .attr("markerWidth", 7)
+    .attr("markerHeight", 7)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M 0 0 L 10 5 L 0 10 z")
+    .attr("fill", "#1f1a16");
+
+  const mapLayer = svg.append("g").attr("clip-path", `url(#${clipId})`);
+
+  mapLayer
     .selectAll("path")
     .data(features)
     .enter()
     .append("path")
+    .attr("class", "country")
     .attr("d", path)
     .attr("fill", (d) => color(values[normalizeCountry(d.properties.name)] || 0))
-    .attr("stroke", "#fff")
-    .attr("stroke-width", 0.7)
     .style("cursor", "pointer")
     .on("mousemove", (event, d) => {
       const name = normalizeCountry(d.properties.name);
@@ -451,6 +516,55 @@ const drawMap = (container, features, values) => {
       render();
     });
 
+  const reporterPoint = reporter ? centroids.get(normalizeCountry(reporter)) : null;
+  const flowMax = d3.max(flows, (d) => d.value) || 0;
+  const strokeScale = d3.scaleSqrt().domain([0, flowMax || 1]).range([0.8, 4.6]);
+
+  const flowLines = flows
+    .map((flow) => {
+      const source = centroids.get(flow.source);
+      const target = centroids.get(flow.target);
+      if (!source || !target || !reporterPoint) return null;
+      return { ...flow, sourcePoint: source, targetPoint: target };
+    })
+    .filter(Boolean);
+
+  mapLayer
+    .append("g")
+    .attr("class", "flow-lines")
+    .selectAll("path")
+    .data(flowLines)
+    .enter()
+    .append("path")
+    .attr("d", (d) => {
+      const [x1, y1] = d.sourcePoint;
+      const [x2, y2] = d.targetPoint;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const length = Math.hypot(dx, dy) || 1;
+      const offset = d.flow === "IMPORT" ? -12 : 12;
+      const nx = (-dy / length) * offset;
+      const ny = (dx / length) * offset;
+      const mx = (x1 + x2) / 2 + nx;
+      const my = (y1 + y2) / 2 + ny;
+      return `M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
+    })
+    .attr("fill", "none")
+    .attr("stroke", "#1f1a16")
+    .attr("stroke-opacity", 0.5)
+    .attr("stroke-width", (d) => strokeScale(d.value))
+    .attr("marker-end", `url(#${arrowId})`)
+    .style("pointer-events", "stroke")
+    .on("mousemove", (event, d) => {
+      const direction = d.flow === "IMPORT" ? `Import from ${d.partner}` : `Export to ${d.partner}`;
+      tooltipEl
+        .style("opacity", 1)
+        .style("left", `${event.clientX + 12}px`)
+        .style("top", `${event.clientY + 12}px`)
+        .text(`${direction}: ${formatValue(d.value)}`);
+    })
+    .on("mouseleave", () => tooltipEl.style("opacity", 0));
+
   charts.mapLegend.html("");
   charts.mapLegend
     .append("span")
@@ -458,6 +572,9 @@ const drawMap = (container, features, values) => {
   charts.mapLegend
     .append("span")
     .html(`<i style="background:${color(maxValue * 0.3)}"></i> Low`);
+  charts.mapLegend
+    .append("span")
+    .text("Arrows show import/export direction");
 };
 
 const renderProductView = (data) => {
@@ -519,15 +636,43 @@ const renderProductView = (data) => {
   drawLine(charts.productLine, series, ["#1f1a16", "#e36414", "#3f6b3f", "#0f4c5c"]);
 };
 
-const renderMapView = (data, europeFeatures) => {
-  const filtered = filterByDate(data).filter((d) => d.product === state.product);
+const renderMapView = (filteredData, fullData, europeFeatures) => {
+  const filtered = filterByDate(filteredData).filter((d) => d.product === state.product);
   const totals = d3.rollups(
     filtered,
     (v) => d3.sum(v, (d) => d.value),
     (d) => d.partner
   );
   const values = Object.fromEntries(totals);
-  drawMap(charts.map, europeFeatures, values);
+
+  const flowBase = fullData.filter((d) => (state.reporter ? d.reporter === state.reporter : true));
+  const flowFiltered = filterByDate(flowBase).filter((d) => d.product === state.product);
+  const flowTotals = d3.rollups(
+    flowFiltered,
+    (v) => d3.sum(v, (d) => d.value),
+    (d) => d.flow,
+    (d) => d.partner
+  );
+
+  const flows = [];
+  flowTotals.forEach(([flow, partners]) => {
+    partners.forEach(([partner, value]) => {
+      const normalizedPartner = normalizeCountry(partner);
+      if (!isEurope(normalizedPartner)) return;
+      const source = flow === "EXPORT" ? state.reporter : normalizedPartner;
+      const target = flow === "EXPORT" ? normalizedPartner : state.reporter;
+      if (!source || !target) return;
+      flows.push({
+        flow,
+        partner: normalizedPartner,
+        source: normalizeCountry(source),
+        target: normalizeCountry(target),
+        value,
+      });
+    });
+  });
+
+  drawMap(charts.map, europeFeatures, values, flows, state.reporter);
 };
 
 const renderCountryDetail = (data) => {
@@ -604,7 +749,7 @@ const render = (data = cachedData) => {
   countryLabelEl.text(state.selectedCountry || "Select a country");
 
   renderProductView(base);
-  renderMapView(base, cachedEurope);
+  renderMapView(base, data, cachedEurope);
   renderCountryDetail(base);
 };
 
@@ -632,6 +777,9 @@ const init = (data, europeFeatures) => {
 
 Promise.all([d3.csv(DATA_PATH, parseRow), d3.json(MAP_PATH)]).then(([data, world]) => {
   const allCountries = topojson.feature(world, world.objects.countries).features;
-  const europe = allCountries.filter((d) => isEurope(d.properties.name));
+  const europe = allCountries
+    .filter((d) => isEurope(d.properties.name))
+    .map((feature) => pruneFranceOverseas(feature))
+    .filter(Boolean);
   init(data, europe);
 });
