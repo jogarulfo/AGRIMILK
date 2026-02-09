@@ -1,0 +1,637 @@
+const DATA_PATH = "data/ds-059341__custom_20028720_linear.csv";
+const MAP_PATH = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+
+const state = {
+  reporter: "",
+  flow: "",
+  year: "",
+  month: "",
+  product: "",
+  productQuery: "",
+  selectedCountry: "",
+  regionFocus: "",
+};
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const EU_COUNTRIES = new Set([
+  "Austria",
+  "Belgium",
+  "Bulgaria",
+  "Croatia",
+  "Cyprus",
+  "Czechia",
+  "Denmark",
+  "Estonia",
+  "Finland",
+  "France",
+  "Germany",
+  "Greece",
+  "Hungary",
+  "Ireland",
+  "Italy",
+  "Latvia",
+  "Lithuania",
+  "Luxembourg",
+  "Malta",
+  "Netherlands",
+  "Poland",
+  "Portugal",
+  "Romania",
+  "Slovakia",
+  "Slovenia",
+  "Spain",
+  "Sweden",
+]);
+
+const EUROPE_EXTRA = new Set([
+  "Albania",
+  "Andorra",
+  "Armenia",
+  "Azerbaijan",
+  "Belarus",
+  "Bosnia and Herzegovina",
+  "Iceland",
+  "Kosovo",
+  "Moldova",
+  "Montenegro",
+  "North Macedonia",
+  "Norway",
+  "Serbia",
+  "Switzerland",
+  "Ukraine",
+  "United Kingdom",
+]);
+
+const AMERICAS = new Set([
+  "Argentina",
+  "Bolivia",
+  "Brazil",
+  "Canada",
+  "Chile",
+  "Colombia",
+  "Costa Rica",
+  "Cuba",
+  "Dominican Republic",
+  "Ecuador",
+  "El Salvador",
+  "Guatemala",
+  "Honduras",
+  "Jamaica",
+  "Mexico",
+  "Nicaragua",
+  "Panama",
+  "Paraguay",
+  "Peru",
+  "United States of America",
+  "Uruguay",
+  "Venezuela",
+]);
+
+const ASIA = new Set([
+  "Afghanistan",
+  "Armenia",
+  "Azerbaijan",
+  "Bahrain",
+  "Bangladesh",
+  "Bhutan",
+  "Brunei",
+  "Cambodia",
+  "China",
+  "Georgia",
+  "India",
+  "Indonesia",
+  "Iran",
+  "Iraq",
+  "Israel",
+  "Japan",
+  "Jordan",
+  "Kazakhstan",
+  "Kuwait",
+  "Kyrgyzstan",
+  "Laos",
+  "Lebanon",
+  "Malaysia",
+  "Mongolia",
+  "Myanmar",
+  "Nepal",
+  "North Korea",
+  "Oman",
+  "Pakistan",
+  "Palestine",
+  "Philippines",
+  "Qatar",
+  "Saudi Arabia",
+  "Singapore",
+  "South Korea",
+  "Sri Lanka",
+  "Syria",
+  "Taiwan",
+  "Thailand",
+  "Turkey",
+  "United Arab Emirates",
+  "Uzbekistan",
+  "Vietnam",
+]);
+
+const COUNTRY_ALIASES = new Map([
+  ["United States", "United States of America"],
+  ["Russian Federation", "Russia"],
+  ["Czech Republic", "Czechia"],
+  ["United Kingdom", "United Kingdom"],
+]);
+
+const formatNumber = d3.format(",.0f");
+const formatValue = d3.format(",.2f");
+const parseMonth = d3.timeParse("%Y-%m");
+const formatMonth = d3.timeFormat("%Y-%m");
+
+const filtersEl = d3.select("#filters");
+const productListEl = d3.select("#productList");
+const productSearchEl = d3.select("#productSearch");
+const productLabelEl = d3.select("#productLabel");
+const mapLabelEl = d3.select("#mapLabel");
+const countryLabelEl = d3.select("#countryLabel");
+const tooltipEl = d3.select("#tooltip");
+
+const charts = {
+  regionPie: d3.select("#regionPie"),
+  euPie: d3.select("#euPie"),
+  productLine: d3.select("#productLine"),
+  map: d3.select("#map"),
+  countryPie: d3.select("#countryPie"),
+  countryLine: d3.select("#countryLine"),
+  mapLegend: d3.select("#mapLegend"),
+};
+
+const normalizeCountry = (name) => {
+  if (!name) return "";
+  return COUNTRY_ALIASES.get(name) || name;
+};
+
+const regionForCountry = (name) => {
+  const country = normalizeCountry(name);
+  if (EU_COUNTRIES.has(country)) return "EU";
+  if (AMERICAS.has(country)) return "America";
+  if (ASIA.has(country)) return "Asia";
+  return "Other";
+};
+
+const isEurope = (name) => {
+  const country = normalizeCountry(name);
+  return EU_COUNTRIES.has(country) || EUROPE_EXTRA.has(country);
+};
+
+const productCategory = (name) => {
+  const lower = name.toLowerCase();
+  if (lower.includes("cheese")) return "Fromage";
+  if (lower.includes("yogurt") || lower.includes("yoghurt") || lower.includes("curdled")) {
+    return "Yaourt";
+  }
+  if (lower.includes("milk") || lower.includes("cream")) return "Lait";
+  return "Other";
+};
+
+const parseRow = (d) => {
+  const date = parseMonth(d.TIME_PERIOD);
+  return {
+    reporter: d.reporter,
+    partner: normalizeCountry(d.partner),
+    product: d.product,
+    flow: d.flow,
+    indicator: d.indicators,
+    date,
+    year: date ? String(date.getFullYear()) : "",
+    month: date ? String(date.getMonth() + 1).padStart(2, "0") : "",
+    value: d.OBS_VALUE === "" ? 0 : +d.OBS_VALUE,
+  };
+};
+
+const createSelect = (label, options, onChange) => {
+  const wrapper = filtersEl.append("label").text(label);
+  const select = wrapper.append("select");
+  select
+    .selectAll("option")
+    .data(options)
+    .enter()
+    .append("option")
+    .attr("value", (d) => d.value)
+    .text((d) => d.label);
+  select.on("change", (event) => onChange(event.target.value));
+  return select;
+};
+
+const updateSelectValue = (select, value) => {
+  select.property("value", value);
+};
+
+const buildFilters = (data) => {
+  const reporters = Array.from(new Set(data.map((d) => d.reporter))).sort(d3.ascending);
+  const flows = Array.from(new Set(data.map((d) => d.flow))).sort(d3.ascending);
+  const years = Array.from(new Set(data.map((d) => d.year))).sort(d3.ascending);
+  const months = Array.from(new Set(data.map((d) => d.month))).sort(d3.ascending);
+
+  state.reporter = state.reporter || reporters[0] || "";
+  state.flow = state.flow || flows[0] || "";
+  state.year = state.year || years[years.length - 1] || "";
+  state.month = state.month || "";
+
+  filtersEl.html("");
+  const reporterSelect = createSelect(
+    "Reporter",
+    reporters.map((d) => ({ label: d, value: d })),
+    (value) => {
+      state.reporter = value;
+      render(data);
+    }
+  );
+
+  const flowSelect = createSelect(
+    "Flow",
+    flows.map((d) => ({ label: d, value: d })),
+    (value) => {
+      state.flow = value;
+      render(data);
+    }
+  );
+
+  const yearSelect = createSelect(
+    "Year",
+    years.map((d) => ({ label: d, value: d })),
+    (value) => {
+      state.year = value;
+      render(data);
+    }
+  );
+
+  const monthOptions = [{ label: "All", value: "" }].concat(
+    months.map((d) => ({ label: MONTHS[Number(d) - 1], value: d }))
+  );
+  const monthSelect = createSelect("Month", monthOptions, (value) => {
+    state.month = value;
+    render(data);
+  });
+
+  updateSelectValue(reporterSelect, state.reporter);
+  updateSelectValue(flowSelect, state.flow);
+  updateSelectValue(yearSelect, state.year);
+  updateSelectValue(monthSelect, state.month);
+};
+
+const buildProductList = (products, data) => {
+  const filtered = state.productQuery
+    ? products.filter((p) => p.toLowerCase().includes(state.productQuery))
+    : products;
+
+  const items = productListEl.selectAll("button").data(filtered, (d) => d);
+  items.exit().remove();
+
+  const enter = items.enter().append("button").attr("class", "product-item");
+  enter.merge(items)
+    .classed("active", (d) => d === state.product)
+    .text((d) => d)
+    .on("click", (event, d) => {
+      state.product = d;
+      render(data);
+      buildProductList(products, data);
+    });
+};
+
+const baseFilter = (data) => {
+  return data.filter((d) => {
+    if (state.reporter && d.reporter !== state.reporter) return false;
+    if (state.flow && d.flow !== state.flow) return false;
+    return true;
+  });
+};
+
+const filterByDate = (data) => {
+  return data.filter((d) => {
+    if (state.year && d.year !== state.year) return false;
+    if (state.month && d.month !== state.month) return false;
+    return true;
+  });
+};
+
+const drawPie = (container, data, colors, onSliceClick) => {
+  const width = container.node().clientWidth;
+  const height = container.node().clientHeight;
+  const radius = Math.min(width, height) / 2 - 10;
+
+  container.selectAll("*").remove();
+  const svg = container.append("svg").attr("width", width).attr("height", height);
+  const group = svg.append("g").attr("transform", `translate(${width / 2},${height / 2})`);
+
+  if (!data.length) {
+    group.append("text").attr("text-anchor", "middle").attr("fill", "#6b5f57").text("No data");
+    return;
+  }
+
+  const color = d3.scaleOrdinal().domain(data.map((d) => d.label)).range(colors);
+  const pie = d3.pie().value((d) => d.value);
+  const arc = d3.arc().innerRadius(radius * 0.3).outerRadius(radius);
+
+  const arcs = group
+    .selectAll("path")
+    .data(pie(data))
+    .enter()
+    .append("path")
+    .attr("d", arc)
+    .attr("fill", (d) => color(d.data.label))
+    .attr("stroke", "#fff")
+    .attr("stroke-width", 1.2)
+    .style("cursor", onSliceClick ? "pointer" : "default");
+
+  if (onSliceClick) {
+    arcs.on("click", (event, d) => onSliceClick(d.data.label));
+  }
+
+  group
+    .selectAll("text")
+    .data(pie(data))
+    .enter()
+    .append("text")
+    .attr("transform", (d) => `translate(${arc.centroid(d)})`)
+    .attr("text-anchor", "middle")
+    .attr("dy", "0.35em")
+    .attr("font-size", 11)
+    .attr("fill", "#1f1a16")
+    .text((d) => (d.data.value ? d.data.label : ""));
+};
+
+const drawLine = (container, series, colors) => {
+  const width = container.node().clientWidth;
+  const height = container.node().clientHeight;
+  const margin = { top: 12, right: 18, bottom: 28, left: 48 };
+
+  container.selectAll("*").remove();
+  const svg = container.append("svg").attr("width", width).attr("height", height);
+  const plot = svg
+    .append("g")
+    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+
+  const allPoints = series.flatMap((s) => s.values);
+  if (!allPoints.length) {
+    plot.append("text").attr("x", innerWidth / 2).attr("y", innerHeight / 2).attr("text-anchor", "middle").attr("fill", "#6b5f57").text("No data");
+    return;
+  }
+
+  const x = d3.scaleTime().domain(d3.extent(allPoints, (d) => d.date)).range([0, innerWidth]);
+  const y = d3.scaleLinear().domain([0, d3.max(allPoints, (d) => d.value) || 0]).nice().range([innerHeight, 0]);
+
+  plot.append("g").attr("transform", `translate(0,${innerHeight})`).call(d3.axisBottom(x).ticks(6));
+  plot.append("g").call(d3.axisLeft(y).ticks(5));
+
+  const color = d3.scaleOrdinal().domain(series.map((d) => d.name)).range(colors);
+  const line = d3.line().x((d) => x(d.date)).y((d) => y(d.value));
+
+  plot
+    .selectAll("path.line")
+    .data(series)
+    .enter()
+    .append("path")
+    .attr("class", "line")
+    .attr("fill", "none")
+    .attr("stroke", (d) => color(d.name))
+    .attr("stroke-width", 2)
+    .attr("d", (d) => line(d.values));
+};
+
+const drawMap = (container, features, values) => {
+  const width = container.node().clientWidth;
+  const height = container.node().clientHeight;
+  container.selectAll("*").remove();
+
+  const svg = container.append("svg").attr("width", width).attr("height", height);
+  const europe = { type: "FeatureCollection", features };
+  const projection = d3.geoMercator().fitSize([width, height], europe);
+  const path = d3.geoPath(projection);
+
+  const maxValue = d3.max(Object.values(values)) || 0;
+  const color = d3.scaleSequential().domain([0, maxValue || 1]).interpolator(d3.interpolateOrRd);
+
+  svg
+    .selectAll("path")
+    .data(features)
+    .enter()
+    .append("path")
+    .attr("d", path)
+    .attr("fill", (d) => color(values[normalizeCountry(d.properties.name)] || 0))
+    .attr("stroke", "#fff")
+    .attr("stroke-width", 0.7)
+    .style("cursor", "pointer")
+    .on("mousemove", (event, d) => {
+      const name = normalizeCountry(d.properties.name);
+      const value = values[name] || 0;
+      tooltipEl
+        .style("opacity", 1)
+        .style("left", `${event.clientX + 12}px`)
+        .style("top", `${event.clientY + 12}px`)
+        .text(`${name}: ${formatValue(value)}`);
+    })
+    .on("mouseleave", () => tooltipEl.style("opacity", 0))
+    .on("click", (event, d) => {
+      state.selectedCountry = normalizeCountry(d.properties.name);
+      render();
+    });
+
+  charts.mapLegend.html("");
+  charts.mapLegend
+    .append("span")
+    .html(`<i style="background:${color(maxValue)}"></i> High`);
+  charts.mapLegend
+    .append("span")
+    .html(`<i style="background:${color(maxValue * 0.3)}"></i> Low`);
+};
+
+const renderProductView = (data) => {
+  const productData = data.filter((d) => d.product === state.product);
+  const yearData = productData.filter((d) => d.year === state.year);
+
+  const regionTotals = d3.rollups(
+    yearData,
+    (v) => d3.sum(v, (d) => d.value),
+    (d) => regionForCountry(d.partner)
+  )
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => d3.descending(a.value, b.value));
+
+  drawPie(
+    charts.regionPie,
+    regionTotals,
+    ["#0f4c5c", "#e36414", "#3f6b3f", "#b9a89a"],
+    (label) => {
+      state.regionFocus = label === "EU" ? "EU" : "";
+      render();
+    }
+  );
+
+  const euTotals = state.regionFocus
+    ? d3.rollups(
+        yearData.filter((d) => regionForCountry(d.partner) === "EU"),
+        (v) => d3.sum(v, (d) => d.value),
+        (d) => d.partner
+      )
+        .map(([label, value]) => ({ label, value }))
+        .sort((a, b) => d3.descending(a.value, b.value))
+        .slice(0, 8)
+    : [];
+
+  drawPie(charts.euPie, euTotals, ["#3f6b3f", "#8bbd8b", "#d0e4d0", "#f1e7db"]);
+
+  const monthly = d3.rollups(
+    productData,
+    (v) => {
+      const total = d3.sum(v, (d) => d.value);
+      const america = d3.sum(v.filter((d) => regionForCountry(d.partner) === "America"), (d) => d.value);
+      const asia = d3.sum(v.filter((d) => regionForCountry(d.partner) === "Asia"), (d) => d.value);
+      const eu = d3.sum(v.filter((d) => regionForCountry(d.partner) === "EU"), (d) => d.value);
+      return { total, america, asia, eu };
+    },
+    (d) => d.date
+  )
+    .map(([date, values]) => ({ date, ...values }))
+    .sort((a, b) => d3.ascending(a.date, b.date));
+
+  const series = [
+    { name: "Total", values: monthly.map((d) => ({ date: d.date, value: d.total })) },
+    { name: "America", values: monthly.map((d) => ({ date: d.date, value: d.america })) },
+    { name: "EU", values: monthly.map((d) => ({ date: d.date, value: d.eu })) },
+    { name: "Asia", values: monthly.map((d) => ({ date: d.date, value: d.asia })) },
+  ];
+
+  drawLine(charts.productLine, series, ["#1f1a16", "#e36414", "#3f6b3f", "#0f4c5c"]);
+};
+
+const renderMapView = (data, europeFeatures) => {
+  const filtered = filterByDate(data).filter((d) => d.product === state.product);
+  const totals = d3.rollups(
+    filtered,
+    (v) => d3.sum(v, (d) => d.value),
+    (d) => d.partner
+  );
+  const values = Object.fromEntries(totals);
+  drawMap(charts.map, europeFeatures, values);
+};
+
+const renderCountryDetail = (data) => {
+  if (!state.selectedCountry) {
+    charts.countryPie.selectAll("*").remove();
+    charts.countryLine.selectAll("*").remove();
+    return;
+  }
+
+  const countryData = data.filter((d) => d.partner === state.selectedCountry);
+  const yearData = countryData.filter((d) => d.year === state.year);
+
+  const productTotals = d3.rollups(
+    yearData,
+    (v) => d3.sum(v, (d) => d.value),
+    (d) => d.product
+  )
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => d3.descending(a.value, b.value));
+
+  const topProducts = productTotals.slice(0, 6);
+  const otherValue = d3.sum(productTotals.slice(6), (d) => d.value);
+  if (otherValue) topProducts.push({ label: "Other", value: otherValue });
+
+  drawPie(charts.countryPie, topProducts, ["#0f4c5c", "#e36414", "#3f6b3f", "#b9a89a", "#7e6f65", "#c7b7a3"]);
+
+  const totalByDate = d3.rollups(
+    data,
+    (v) => d3.sum(v, (d) => d.value),
+    (d) => d.date
+  );
+  const totalMap = new Map(totalByDate);
+
+  const countryByDate = d3.rollups(
+    countryData,
+    (v) => {
+      const total = d3.sum(v, (d) => d.value);
+      const lait = d3.sum(v.filter((d) => productCategory(d.product) === "Lait"), (d) => d.value);
+      const fromage = d3.sum(v.filter((d) => productCategory(d.product) === "Fromage"), (d) => d.value);
+      const yaourt = d3.sum(v.filter((d) => productCategory(d.product) === "Yaourt"), (d) => d.value);
+      return { total, lait, fromage, yaourt };
+    },
+    (d) => d.date
+  )
+    .map(([date, values]) => {
+      const all = totalMap.get(date) || 0;
+      return {
+        date,
+        total: all ? (values.total / all) * 100 : 0,
+        lait: all ? (values.lait / all) * 100 : 0,
+        fromage: all ? (values.fromage / all) * 100 : 0,
+        yaourt: all ? (values.yaourt / all) * 100 : 0,
+      };
+    })
+    .sort((a, b) => d3.ascending(a.date, b.date));
+
+  const series = [
+    { name: "Total", values: countryByDate.map((d) => ({ date: d.date, value: d.total })) },
+    { name: "Lait", values: countryByDate.map((d) => ({ date: d.date, value: d.lait })) },
+    { name: "Fromage", values: countryByDate.map((d) => ({ date: d.date, value: d.fromage })) },
+    { name: "Yaourt", values: countryByDate.map((d) => ({ date: d.date, value: d.yaourt })) },
+  ];
+
+  drawLine(charts.countryLine, series, ["#1f1a16", "#0f4c5c", "#e36414", "#3f6b3f"]);
+};
+
+let cachedData = [];
+let cachedEurope = [];
+
+const render = (data = cachedData) => {
+  const base = baseFilter(data);
+  productLabelEl.text(state.product || "No product");
+  mapLabelEl.text(`${state.year || ""} ${state.month ? MONTHS[Number(state.month) - 1] : "All"}`);
+  countryLabelEl.text(state.selectedCountry || "Select a country");
+
+  renderProductView(base);
+  renderMapView(base, cachedEurope);
+  renderCountryDetail(base);
+};
+
+const onResize = () => {
+  window.addEventListener("resize", () => render());
+};
+
+const init = (data, europeFeatures) => {
+  cachedData = data;
+  cachedEurope = europeFeatures;
+
+  const products = Array.from(new Set(data.map((d) => d.product))).sort(d3.ascending);
+  state.product = state.product || products[0] || "";
+
+  buildFilters(data);
+  buildProductList(products, data);
+  productSearchEl.on("input", (event) => {
+    state.productQuery = event.target.value.trim().toLowerCase();
+    buildProductList(products, data);
+  });
+
+  render();
+  onResize();
+};
+
+Promise.all([d3.csv(DATA_PATH, parseRow), d3.json(MAP_PATH)]).then(([data, world]) => {
+  const allCountries = topojson.feature(world, world.objects.countries).features;
+  const europe = allCountries.filter((d) => isEurope(d.properties.name));
+  init(data, europe);
+});

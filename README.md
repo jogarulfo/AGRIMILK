@@ -9,7 +9,7 @@ Dimensions des données :
 
     Temps : Année, mois.
 
-    Géographie : Pays UE (Union Européenne), pays tiers.
+    Géographie : Pays UE (Union Européenne), pays tiers, carte 2D.
 
     Produit : Lait, fromage, etc.
 
