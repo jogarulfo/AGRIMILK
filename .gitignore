@@ -1,0 +1,11 @@
+# Ignore data directory
+data/
+
+# Ignore all .log files
+*.log
+
+# Ignore environment variables
+.env
+
+# Ignore specific system files
+.DS_Store
