@@ -84,6 +84,16 @@ input {
   border: 1px solid var(--grid);
   font-family: "Space Grotesk", sans-serif;
   background: #fff;
+  max-width: 150px;
+  min-width: 50px;
+}
+
+select {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 150px;
+  min-width: 50px;
 }
 
 .layout {
@@ -91,9 +101,7 @@ input {
   grid-template-columns: 1fr;
   grid-template-areas:
     "map"
-    "sidebar"
-    "product"
-    "detail";
+    "product";
   gap: 16px;
   padding: 12px 24px 32px;
 }
@@ -115,21 +123,12 @@ input {
   gap: 12px;
 }
 
-.sidebar {
-  grid-area: sidebar;
-  min-height: 600px;
-}
-
 .product {
   grid-area: product;
 }
 
 .map {
   grid-area: map;
-}
-
-.detail {
-  grid-area: detail;
 }
 
 .split {
@@ -146,26 +145,7 @@ input {
   color: var(--muted);
 }
 
-.product-list {
-  display: grid;
-  gap: 8px;
-  max-height: 520px;
-  overflow: auto;
-  padding-right: 4px;
-}
 
-.product-item {
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  background: #fff;
-}
-
-.product-item.active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(15, 76, 92, 0.2);
-}
 
 .chart {
   width: 100%;
@@ -235,9 +215,5 @@ input {
 @media (max-width: 1100px) {
   .split {
     grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    min-height: auto;
   }
 }
